@@ -1,8 +1,9 @@
 import os
+import shutil
+import subprocess
 import tempfile
 
 import gradio as gr
-import yt_dlp
 from audio_separator.separator import Separator
 
 # --- Speaker diarization (optional: requires HF_TOKEN) ---
@@ -18,7 +19,6 @@ if HF_TOKEN:
     except ImportError:
         pass
 
-MAX_DURATION_SEC = 600  # 10 minutes limit
 MAX_SPEAKERS = 4
 
 
@@ -27,40 +27,18 @@ MAX_SPEAKERS = 4
 # ------------------------------------------------------------------
 
 
-def download_audio(url: str, output_dir: str) -> tuple[str, str]:
-    """YouTube URL から音声を WAV でダウンロードする。"""
-    output_template = os.path.join(output_dir, "input.%(ext)s")
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": output_template,
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "wav",
-                "preferredquality": "192",
-            }
-        ],
-        "quiet": True,
-        "no_warnings": True,
-        "match_filter": yt_dlp.utils.match_filter_func(
-            f"duration <= {MAX_DURATION_SEC}"
-        ),
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if info is None:
-            raise gr.Error(
-                f"動画が {MAX_DURATION_SEC // 60} 分を超えています。短い動画で試してください。"
-            )
-        title = info.get("title", "Unknown")
-
+def convert_to_wav(input_path: str, output_dir: str) -> str:
+    """任意の音声/動画ファイルを WAV に変換する。"""
     wav_path = os.path.join(output_dir, "input.wav")
-    if not os.path.exists(wav_path):
-        raise FileNotFoundError("ダウンロードした音声ファイルが見つかりません。")
-    return wav_path, title
+    subprocess.run(
+        ["ffmpeg", "-i", input_path, "-ar", "44100", "-ac", "2", wav_path, "-y"],
+        capture_output=True,
+        check=True,
+    )
+    return wav_path
 
 
-def separate_audio(audio_path: str, output_dir: str) -> tuple[str | None, str | None]:
+def separate_audio(audio_path: str, output_dir: str):
     """ボーカルと伴奏に分離する。"""
     separator = Separator(output_dir=output_dir, output_format="wav")
     separator.load_model("UVR-MDX-NET-Voc_FT.onnx")
@@ -99,7 +77,7 @@ def diarize_speakers(vocals_path: str, output_dir: str) -> list[str]:
 
     audio = AudioSegment.from_wav(vocals_path)
 
-    speakers: dict[str, list[tuple[int, int]]] = {}
+    speakers = {}
     for turn, _, speaker in diarization.itertracks(yield_label=True):
         speakers.setdefault(speaker, []).append(
             (int(turn.start * 1000), int(turn.end * 1000))
@@ -123,55 +101,61 @@ def diarize_speakers(vocals_path: str, output_dir: str) -> list[str]:
 # ------------------------------------------------------------------
 
 
-def process(url: str, enable_diarization: bool, progress=gr.Progress()):
-    """YouTube URL を受け取り、分離処理を行う。"""
-    if not url or not url.strip():
-        raise gr.Error("YouTube の URL を入力してください。")
+def process(audio_file, enable_diarization, progress=gr.Progress()):
+    """アップロードされた音声ファイルを処理する。"""
+    if audio_file is None:
+        raise gr.Error("音声ファイルをアップロードしてください。")
 
     work_dir = tempfile.mkdtemp(prefix="audio_sep_")
     output_dir = os.path.join(work_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Step 1: Download
-    progress(0.1, desc="YouTube からダウンロード中...")
-    audio_path, title = download_audio(url, work_dir)
+    try:
+        # Step 1: Convert to WAV
+        progress(0.1, desc="音声を変換中...")
+        wav_path = convert_to_wav(audio_file, work_dir)
 
-    # Step 2: Vocal / Instrumental separation
-    progress(0.3, desc="ボーカルと伴奏を分離中...")
-    vocals_path, instrumental_path = separate_audio(audio_path, output_dir)
+        # Step 2: Vocal / Instrumental separation
+        progress(0.3, desc="ボーカルと伴奏を分離中...")
+        vocals_path, instrumental_path = separate_audio(wav_path, output_dir)
 
-    # Step 3: Speaker diarization (optional)
-    speaker_files: list[str] = []
-    info_parts = [f"**{title}** の処理が完了しました。"]
+        # Step 3: Speaker diarization (optional)
+        speaker_files = []
+        info_parts = ["処理が完了しました。"]
 
-    if enable_diarization:
-        if DIARIZATION_AVAILABLE:
-            progress(0.6, desc="話者を分離中...")
-            speaker_files = diarize_speakers(vocals_path, output_dir)
-            if speaker_files:
-                info_parts.append(f"{len(speaker_files)} 人の話者を検出しました。")
+        if enable_diarization:
+            if DIARIZATION_AVAILABLE:
+                progress(0.6, desc="話者を分離中...")
+                speaker_files = diarize_speakers(vocals_path, output_dir)
+                if speaker_files:
+                    info_parts.append(
+                        f"{len(speaker_files)} 人の話者を検出しました。"
+                    )
+                else:
+                    info_parts.append("話者を検出できませんでした。")
             else:
-                info_parts.append("話者を検出できませんでした。")
-        else:
-            info_parts.append(
-                "話者分離を利用するには、Space の Secrets に `HF_TOKEN` を設定し、"
-                "[pyannote/speaker-diarization-3.1]"
-                "(https://huggingface.co/pyannote/speaker-diarization-3.1) "
-                "のライセンスに同意してください。"
-            )
+                info_parts.append(
+                    "話者分離を利用するには、Space の Secrets に HF_TOKEN を設定し、"
+                    "pyannote/speaker-diarization-3.1 のライセンスに同意してください。"
+                )
 
-    progress(1.0, desc="完了!")
+        progress(1.0, desc="完了!")
 
-    # Pad speaker_files to exactly MAX_SPEAKERS slots
-    padded = speaker_files[:MAX_SPEAKERS]
-    padded += [None] * (MAX_SPEAKERS - len(padded))
+        # Pad speaker_files to exactly MAX_SPEAKERS slots
+        padded = speaker_files[:MAX_SPEAKERS]
+        padded += [None] * (MAX_SPEAKERS - len(padded))
 
-    return (
-        "\n\n".join(info_parts),
-        instrumental_path,
-        vocals_path,
-        *padded,
-    )
+        return (
+            "\n\n".join(info_parts),
+            instrumental_path,
+            vocals_path,
+            *padded,
+        )
+
+    except subprocess.CalledProcessError:
+        raise gr.Error("音声ファイルの変換に失敗しました。対応形式か確認してください。")
+    except Exception as e:
+        raise gr.Error(f"処理中にエラーが発生しました: {e}")
 
 
 # ------------------------------------------------------------------
@@ -181,22 +165,21 @@ def process(url: str, enable_diarization: bool, progress=gr.Progress()):
 with gr.Blocks(title="Audio Separator", theme=gr.themes.Soft()) as demo:
     gr.Markdown("# Audio Separator")
     gr.Markdown(
-        "YouTube の URL を入力して、**ボーカル・伴奏の分離**と"
+        "音声ファイルをアップロードして、**ボーカル・伴奏の分離**と"
         "**話者ごとの分離**を行います。\n\n"
         "CPU 処理のため、1 曲あたり数分かかる場合があります。"
     )
 
     with gr.Row():
-        url_input = gr.Textbox(
-            label="YouTube URL",
-            placeholder="https://www.youtube.com/watch?v=...",
-            scale=4,
+        audio_input = gr.Audio(
+            label="音声ファイル",
+            type="filepath",
+            sources=["upload"],
         )
         enable_diarization = gr.Checkbox(
             label="話者分離",
             value=DIARIZATION_AVAILABLE,
             interactive=True,
-            scale=1,
         )
 
     process_btn = gr.Button("処理開始", variant="primary", size="lg")
@@ -215,7 +198,7 @@ with gr.Blocks(title="Audio Separator", theme=gr.themes.Soft()) as demo:
 
     process_btn.click(
         fn=process,
-        inputs=[url_input, enable_diarization],
+        inputs=[audio_input, enable_diarization],
         outputs=[status_md, instrumental_out, vocals_out, *speaker_outs],
     )
 
