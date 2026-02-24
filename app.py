@@ -219,4 +219,4 @@ with gr.Blocks(title="Audio Separator", theme=gr.themes.Soft()) as demo:
         outputs=[status_md, instrumental_out, vocals_out, *speaker_outs],
     )
 
-demo.launch(ssr=False)
+demo.launch()
