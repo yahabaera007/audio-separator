@@ -29,18 +29,11 @@ MAX_SPEAKERS = 4
 
 
 def download_audio(url, output_dir):
-    """YouTube URL から音声を WAV でダウンロードする。"""
-    output_template = os.path.join(output_dir, "input.%(ext)s")
+    """YouTube URL から音声をダウンロードし WAV に変換する。"""
+    output_template = os.path.join(output_dir, "dl_input.%(ext)s")
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "wav",
-                "preferredquality": "192",
-            }
-        ],
         "quiet": True,
         "no_warnings": True,
         "match_filter": yt_dlp.utils.match_filter_func(
@@ -55,9 +48,23 @@ def download_audio(url, output_dir):
             )
         title = info.get("title", "Unknown")
 
-    wav_path = os.path.join(output_dir, "input.wav")
-    if not os.path.exists(wav_path):
+    # Find the downloaded file (could be .webm, .m4a, .opus, etc.)
+    downloaded = None
+    for f in os.listdir(output_dir):
+        if f.startswith("dl_input."):
+            downloaded = os.path.join(output_dir, f)
+            break
+
+    if downloaded is None:
         raise FileNotFoundError("ダウンロードした音声が見つかりません。")
+
+    # Convert to WAV with ffmpeg
+    wav_path = os.path.join(output_dir, "input.wav")
+    subprocess.run(
+        ["ffmpeg", "-i", downloaded, "-ar", "44100", "-ac", "2", wav_path, "-y"],
+        capture_output=True,
+        check=True,
+    )
     return wav_path, title
 
 
