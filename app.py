@@ -79,32 +79,62 @@ def download_audio(url, output_dir):
     before = set(os.listdir(output_dir)) if os.path.exists(output_dir) else set()
 
     output_template = os.path.join(output_dir, "dl_input.%(ext)s")
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": output_template,
-        "quiet": True,
-        "no_warnings": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "extractor_args": {"youtube": {"player_client": ["mediaconnect"]}},
-    }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadError as e:
-        err_msg = str(e).lower()
-        if "private" in err_msg:
-            raise gr.Error("この動画は非公開です。公開動画の URL を入力してください。")
-        if "age" in err_msg:
-            raise gr.Error("年齢制限付き動画はダウンロードできません。")
-        if "unavailable" in err_msg or "not available" in err_msg:
-            raise gr.Error("この動画は利用できません。URL を確認してください。")
-        if "copyright" in err_msg:
-            raise gr.Error("著作権の制限によりダウンロードできません。")
-        raise gr.Error(f"動画のダウンロードに失敗しました: {e}")
-    except Exception as e:
-        raise gr.Error(f"ダウンロード中にエラーが発生しました: {e}")
+    # Try multiple player clients - some handle age-restricted content
+    client_strategies = [
+        ["mediaconnect"],
+        ["tv_embedded", "web"],
+        ["android", "web"],
+    ]
+
+    info = None
+    last_error = None
+
+    for clients in client_strategies:
+        # Clean up any partial downloads before retry
+        for f in os.listdir(output_dir):
+            if f.startswith("dl_input"):
+                try:
+                    os.remove(os.path.join(output_dir, f))
+                except Exception:
+                    pass
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "extractor_args": {"youtube": {"player_client": clients}},
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+            if info is not None:
+                break
+        except yt_dlp.utils.DownloadError as e:
+            last_error = e
+            err_msg = str(e).lower()
+            if "private" in err_msg:
+                raise gr.Error("この動画は非公開です。公開動画の URL を入力してください。")
+            if "copyright" in err_msg:
+                raise gr.Error("著作権の制限によりダウンロードできません。")
+            # Age-restricted or unavailable: try next client strategy
+            print(f"[INFO] Client {clients} failed: {e}, trying next...", flush=True)
+            continue
+        except Exception as e:
+            last_error = e
+            continue
+
+    if info is None:
+        if last_error:
+            err_msg = str(last_error).lower()
+            if "unavailable" in err_msg or "not available" in err_msg:
+                raise gr.Error("この動画は利用できません。URL を確認してください。")
+            raise gr.Error(f"動画のダウンロードに失敗しました: {last_error}")
+        raise gr.Error("動画のダウンロードに失敗しました。URL を確認してください。")
 
     if info is None:
         raise gr.Error("動画の情報を取得できませんでした。URL を確認してください。")
