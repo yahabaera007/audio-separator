@@ -10,8 +10,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download the separation model at build time
+RUN python -c "from audio_separator.separator import Separator; s = Separator(); s.load_model('UVR-MDX-NET-Voc_FT.onnx')"
+
 COPY app.py .
 
+RUN chown -R user:user /app
 USER user
 EXPOSE 7860
 
