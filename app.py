@@ -19,6 +19,7 @@ if HF_TOKEN:
         pass
 
 MAX_DURATION_SEC = 600  # 10 minutes limit
+MAX_SPEAKERS = 4
 
 
 # ------------------------------------------------------------------
@@ -161,11 +162,15 @@ def process(url: str, enable_diarization: bool, progress=gr.Progress()):
 
     progress(1.0, desc="完了!")
 
+    # Pad speaker_files to exactly MAX_SPEAKERS slots
+    padded = speaker_files[:MAX_SPEAKERS]
+    padded += [None] * (MAX_SPEAKERS - len(padded))
+
     return (
         "\n\n".join(info_parts),
         instrumental_path,
         vocals_path,
-        speaker_files or None,
+        *padded,
     )
 
 
@@ -201,12 +206,17 @@ with gr.Blocks(title="Audio Separator", theme=gr.themes.Soft()) as demo:
         instrumental_out = gr.Audio(label="伴奏 (Instrumental)", type="filepath")
         vocals_out = gr.Audio(label="ボーカル (Vocals)", type="filepath")
 
-    speakers_out = gr.Files(label="話者別ファイル")
+    with gr.Row():
+        speaker_outs = []
+        for i in range(MAX_SPEAKERS):
+            speaker_outs.append(
+                gr.Audio(label=f"話者 {i + 1}", type="filepath")
+            )
 
     process_btn.click(
         fn=process,
         inputs=[url_input, enable_diarization],
-        outputs=[status_md, instrumental_out, vocals_out, speakers_out],
+        outputs=[status_md, instrumental_out, vocals_out, *speaker_outs],
     )
 
-demo.launch()
+demo.launch(ssr=False)
