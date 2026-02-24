@@ -73,6 +73,11 @@ def download_audio(url, output_dir):
     if result.returncode != 0:
         raise gr.Error(f"WAV変換に失敗: {result.stderr.decode()[:300]}")
 
+    wav_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
+    print(f"[DEBUG] downloaded: {downloaded} -> wav: {wav_path} ({wav_size} bytes)", flush=True)
+    if wav_size <= 0:
+        raise gr.Error("WAV変換後のファイルが空です。")
+
     return wav_path, title
 
 
@@ -93,6 +98,8 @@ def separate_audio(audio_path, output_dir):
     separator.load_model("UVR-MDX-NET-Voc_FT.onnx")
     results = separator.separate(audio_path)
 
+    print(f"[DEBUG] separator results: {results}", flush=True)
+
     vocals = None
     instrumental = None
     for path in results:
@@ -104,6 +111,16 @@ def separate_audio(audio_path, output_dir):
 
     if vocals is None and instrumental is None and len(results) >= 2:
         instrumental, vocals = results[0], results[1]
+
+    # Validate files exist and have content
+    for label, fpath in [("vocals", vocals), ("instrumental", instrumental)]:
+        if fpath:
+            size = os.path.getsize(fpath) if os.path.exists(fpath) else -1
+            print(f"[DEBUG] {label}: {fpath} ({size} bytes)", flush=True)
+            if size <= 0:
+                raise gr.Error(f"{label} ファイルが空です: {fpath}")
+        else:
+            print(f"[DEBUG] {label}: None", flush=True)
 
     return vocals, instrumental
 
