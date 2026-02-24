@@ -15,8 +15,16 @@ RUN python -c "from audio_separator.separator import Separator; s = Separator();
 
 COPY app.py .
 
-RUN chown -R user:user /app
+# Ensure tmp and app dirs are writable
+RUN mkdir -p /tmp/audio_sep && \
+    chown -R user:user /app /tmp/audio_sep
+
 USER user
+
+ENV TMPDIR=/tmp/audio_sep
+ENV GRADIO_SERVER_NAME=0.0.0.0
+ENV GRADIO_SERVER_PORT=7860
+
 EXPOSE 7860
 
 CMD ["python", "app.py"]
