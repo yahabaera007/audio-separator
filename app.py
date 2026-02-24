@@ -45,6 +45,7 @@ def download_audio(url, output_dir):
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["mediaconnect"]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
