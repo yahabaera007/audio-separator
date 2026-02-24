@@ -30,41 +30,49 @@ MAX_SPEAKERS = 4
 
 def download_audio(url, output_dir):
     """YouTube URL から音声をダウンロードし WAV に変換する。"""
+    # Record files before download
+    before = set(os.listdir(output_dir)) if os.path.exists(output_dir) else set()
+
     output_template = os.path.join(output_dir, "dl_input.%(ext)s")
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
-        "match_filter": yt_dlp.utils.match_filter_func(
-            f"duration <= {MAX_DURATION_SEC}"
-        ),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if info is None:
-            raise gr.Error(
-                f"動画が {MAX_DURATION_SEC // 60} 分を超えています。"
-            )
+            raise gr.Error("動画の情報を取得できませんでした。")
         title = info.get("title", "Unknown")
 
-    # Find the downloaded file (could be .webm, .m4a, .opus, etc.)
-    downloaded = None
-    for f in os.listdir(output_dir):
-        if f.startswith("dl_input."):
-            downloaded = os.path.join(output_dir, f)
-            break
+        # Try to get filename from yt-dlp
+        try:
+            downloaded = ydl.prepare_filename(info)
+        except Exception:
+            downloaded = None
 
-    if downloaded is None:
-        raise FileNotFoundError("ダウンロードした音声が見つかりません。")
+    # If prepare_filename didn't work, find new file in directory
+    if not downloaded or not os.path.exists(downloaded):
+        after = set(os.listdir(output_dir))
+        new_files = after - before
+        if new_files:
+            downloaded = os.path.join(output_dir, new_files.pop())
+        else:
+            files_in_dir = os.listdir(output_dir)
+            raise FileNotFoundError(
+                f"ダウンロードファイルが見つかりません。ディレクトリ内容: {files_in_dir}"
+            )
 
     # Convert to WAV with ffmpeg
     wav_path = os.path.join(output_dir, "input.wav")
-    subprocess.run(
+    result = subprocess.run(
         ["ffmpeg", "-i", downloaded, "-ar", "44100", "-ac", "2", wav_path, "-y"],
         capture_output=True,
-        check=True,
     )
+    if result.returncode != 0:
+        raise gr.Error(f"WAV変換に失敗: {result.stderr.decode()[:300]}")
+
     return wav_path, title
 
 
